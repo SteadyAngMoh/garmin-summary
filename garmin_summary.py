@@ -1,31 +1,41 @@
 import json
 from datetime import date, timedelta, datetime
+from zoneinfo import ZoneInfo
 from garminconnect import Garmin
 
 TOKEN_DIR = "~/.garminconnect"
+UK_TZ = ZoneInfo("Europe/London")
 
 
 def safe_get(data, *keys, default=None):
-    """Safely walk through nested dictionaries."""
     current = data
-
     for key in keys:
         if not isinstance(current, dict):
             return default
-
         current = current.get(key)
-
         if current is None:
             return default
-
     return current
 
 
 def seconds_to_hours(seconds):
     if seconds is None:
         return None
-
     return round(seconds / 3600, 2)
+
+
+def timestamp_to_uk(timestamp):
+    """Convert Garmin millisecond Unix timestamp to UK local time."""
+    if not timestamp:
+        return None
+
+    try:
+        return datetime.fromtimestamp(
+            timestamp / 1000,
+            tz=UK_TZ
+        ).isoformat()
+    except (TypeError, ValueError, OSError):
+        return timestamp
 
 
 def get_day(client, day):
@@ -73,8 +83,12 @@ def get_day(client, day):
             "hours": seconds_to_hours(
                 sleep_dto.get("sleepTimeSeconds")
             ),
-            "start": sleep_dto.get("sleepStartTimestampLocal"),
-            "end": sleep_dto.get("sleepEndTimestampLocal"),
+            "start": timestamp_to_uk(
+                sleep_dto.get("sleepStartTimestampLocal")
+            ),
+            "end": timestamp_to_uk(
+                sleep_dto.get("sleepEndTimestampLocal")
+            ),
             "score": safe_get(
                 sleep_dto,
                 "sleepScores",
@@ -85,27 +99,49 @@ def get_day(client, day):
 
         "hrv": {
             "weekly_average": safe_get(
-                hrv,
-                "hrvSummary",
-                "weeklyAvg"
+                hrv, "hrvSummary", "weeklyAvg"
             ),
             "last_night_average": safe_get(
-                hrv,
-                "hrvSummary",
-                "lastNightAvg"
+                hrv, "hrvSummary", "lastNightAvg"
             ),
             "last_night_5min_high": safe_get(
-                hrv,
-                "hrvSummary",
-                "lastNight5MinHigh"
+                hrv, "hrvSummary", "lastNight5MinHigh"
             ),
             "status": safe_get(
-                hrv,
-                "hrvSummary",
-                "status"
+                hrv, "hrvSummary", "status"
             ),
         },
     }
+
+
+def get_intraday(client, day):
+    day_string = day.isoformat()
+
+    result = {
+        "date": day_string,
+        "heart_rate": None,
+        "stress_body_battery": None,
+    }
+
+    try:
+        result["heart_rate"] = client.get_heart_rates(day_string)
+    except Exception as exc:
+        print(
+            f"Warning: heart-rate timeline unavailable "
+            f"for {day_string}: {exc}"
+        )
+
+    try:
+        result["stress_body_battery"] = (
+            client.get_stress_data(day_string)
+        )
+    except Exception as exc:
+        print(
+            f"Warning: stress/Body Battery timeline unavailable "
+            f"for {day_string}: {exc}"
+        )
+
+    return result
 
 
 def get_activities(client, start_date, end_date):
@@ -147,48 +183,41 @@ def print_day(day):
     print("Steps:", day["steps"])
     print("Resting HR:", day["heart_rate"]["resting_bpm"])
     print("Average stress:", day["stress"]["average"])
+
     print(
         "Body Battery:",
         day["body_battery"]["lowest"],
         "→",
         day["body_battery"]["highest"]
     )
+
     print("Sleep hours:", day["sleep"]["hours"])
     print("Sleep score:", day["sleep"]["score"])
     print("Sleep start:", day["sleep"]["start"])
     print("Sleep end:", day["sleep"]["end"])
-    print(
-        "Overnight HRV:",
-        day["hrv"]["last_night_average"]
-    )
+    print("Overnight HRV:", day["hrv"]["last_night_average"])
 
 
-# -------------------------
-# Connect to Garmin
-# -------------------------
-
+# Connect using saved authentication
 client = Garmin()
-
-# Uses the token we already saved on the Pixel.
 client.login(TOKEN_DIR)
-
-today = date.today()
-yesterday = today - timedelta(days=1)
 
 print("Connected to Garmin using saved token.")
 
-# -------------------------
-# Collect daily context
-# -------------------------
+today = date.today()
+yesterday = today - timedelta(days=1)
 
 days = [
     get_day(client, yesterday),
     get_day(client, today),
 ]
 
-# -------------------------
-# Collect activities
-# -------------------------
+print("Fetching intraday Garmin timelines...")
+
+intraday = [
+    get_intraday(client, yesterday),
+    get_intraday(client, today),
+]
 
 activities = get_activities(
     client,
@@ -196,12 +225,9 @@ activities = get_activities(
     today
 )
 
-# -------------------------
-# Final dataset
-# -------------------------
-
 report = {
-    "generated_at": datetime.now().astimezone().isoformat(),
+    "generated_at": datetime.now(UK_TZ).isoformat(),
+
     "period": {
         "start_date": yesterday.isoformat(),
         "end_date": today.isoformat(),
@@ -209,18 +235,16 @@ report = {
 
     "interpretation_notes": [
         "Garmin wearable data provides contextual information only.",
-        "Activity, stress, sleep, heart-rate and HRV associations do not prove causation of glucose changes.",
-        "Daily totals may be incomplete for the current day.",
-        "Garmin sleep metrics are Garmin-derived estimates.",
+        "Associations between Garmin metrics and glucose changes do not prove causation.",
+        "Current-day Garmin totals may be incomplete.",
+        "Sleep, stress, Body Battery and HRV are Garmin-derived estimates.",
     ],
 
     "daily": days,
     "activities": activities,
+    "intraday": intraday,
 }
 
-# -------------------------
-# Human-readable output
-# -------------------------
 
 print()
 print("GARMIN 48-HOUR CONTEXT")
@@ -228,6 +252,7 @@ print("======================")
 
 for day_data in days:
     print_day(day_data)
+
 
 print()
 print("Activities")
@@ -250,9 +275,23 @@ if activities:
 else:
     print("No activities recorded.")
 
-# -------------------------
-# Save machine-readable JSON
-# -------------------------
+
+print()
+print("Intraday data")
+print("-------------------------")
+
+for day_data in intraday:
+    hr_ok = day_data["heart_rate"] is not None
+    stress_ok = day_data["stress_body_battery"] is not None
+
+    print(
+        day_data["date"],
+        "| HR:",
+        "OK" if hr_ok else "Unavailable",
+        "| Stress/Body Battery:",
+        "OK" if stress_ok else "Unavailable"
+    )
+
 
 with open("garmin_summary.json", "w") as file:
     json.dump(
