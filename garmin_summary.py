@@ -1,31 +1,45 @@
 import json
+import os
 from datetime import date, timedelta, datetime
 from zoneinfo import ZoneInfo
+
+import requests
+from dotenv import load_dotenv
 from garminconnect import Garmin
 
+
 TOKEN_DIR = "~/.garminconnect"
+ENV_FILE = os.path.expanduser("~/.garmin_env")
 UK_TZ = ZoneInfo("Europe/London")
+
+EMAIL_FROM = "Garmin Report <glucose@precisionbiomodeling.com>"
 
 
 def safe_get(data, *keys, default=None):
     current = data
+
     for key in keys:
         if not isinstance(current, dict):
             return default
+
         current = current.get(key)
+
         if current is None:
             return default
+
     return current
 
 
 def seconds_to_hours(seconds):
     if seconds is None:
         return None
+
     return round(seconds / 3600, 2)
 
 
 def timestamp_to_uk(timestamp):
     """Convert Garmin millisecond Unix timestamp to UK local time."""
+
     if not timestamp:
         return None
 
@@ -34,6 +48,7 @@ def timestamp_to_uk(timestamp):
             timestamp / 1000,
             tz=UK_TZ
         ).isoformat()
+
     except (TypeError, ValueError, OSError):
         return timestamp
 
@@ -45,14 +60,24 @@ def get_day(client, day):
 
     try:
         sleep = client.get_sleep_data(day_string)
+
     except Exception as exc:
-        print(f"Warning: sleep unavailable for {day_string}: {exc}")
+        print(
+            f"Warning: sleep unavailable for "
+            f"{day_string}: {exc}"
+        )
+
         sleep = {}
 
     try:
         hrv = client.get_hrv_data(day_string)
+
     except Exception as exc:
-        print(f"Warning: HRV unavailable for {day_string}: {exc}")
+        print(
+            f"Warning: HRV unavailable for "
+            f"{day_string}: {exc}"
+        )
+
         hrv = {}
 
     sleep_dto = sleep.get("dailySleepDTO", {})
@@ -80,15 +105,19 @@ def get_day(client, day):
 
         "sleep": {
             "seconds": sleep_dto.get("sleepTimeSeconds"),
+
             "hours": seconds_to_hours(
                 sleep_dto.get("sleepTimeSeconds")
             ),
+
             "start": timestamp_to_uk(
                 sleep_dto.get("sleepStartTimestampLocal")
             ),
+
             "end": timestamp_to_uk(
                 sleep_dto.get("sleepEndTimestampLocal")
             ),
+
             "score": safe_get(
                 sleep_dto,
                 "sleepScores",
@@ -99,16 +128,27 @@ def get_day(client, day):
 
         "hrv": {
             "weekly_average": safe_get(
-                hrv, "hrvSummary", "weeklyAvg"
+                hrv,
+                "hrvSummary",
+                "weeklyAvg"
             ),
+
             "last_night_average": safe_get(
-                hrv, "hrvSummary", "lastNightAvg"
+                hrv,
+                "hrvSummary",
+                "lastNightAvg"
             ),
+
             "last_night_5min_high": safe_get(
-                hrv, "hrvSummary", "lastNight5MinHigh"
+                hrv,
+                "hrvSummary",
+                "lastNight5MinHigh"
             ),
+
             "status": safe_get(
-                hrv, "hrvSummary", "status"
+                hrv,
+                "hrvSummary",
+                "status"
             ),
         },
     }
@@ -124,7 +164,10 @@ def get_intraday(client, day):
     }
 
     try:
-        result["heart_rate"] = client.get_heart_rates(day_string)
+        result["heart_rate"] = client.get_heart_rates(
+            day_string
+        )
+
     except Exception as exc:
         print(
             f"Warning: heart-rate timeline unavailable "
@@ -135,10 +178,11 @@ def get_intraday(client, day):
         result["stress_body_battery"] = (
             client.get_stress_data(day_string)
         )
+
     except Exception as exc:
         print(
-            f"Warning: stress/Body Battery timeline unavailable "
-            f"for {day_string}: {exc}"
+            f"Warning: stress/Body Battery timeline "
+            f"unavailable for {day_string}: {exc}"
         )
 
     return result
@@ -150,8 +194,12 @@ def get_activities(client, start_date, end_date):
             start_date.isoformat(),
             end_date.isoformat()
         )
+
     except Exception as exc:
-        print(f"Warning: activities unavailable: {exc}")
+        print(
+            f"Warning: activities unavailable: {exc}"
+        )
+
         return []
 
     cleaned = []
@@ -159,18 +207,38 @@ def get_activities(client, start_date, end_date):
     for activity in activities:
         cleaned.append({
             "id": activity.get("activityId"),
+
             "name": activity.get("activityName"),
+
             "type": safe_get(
                 activity,
                 "activityType",
                 "typeKey"
             ),
-            "start_local": activity.get("startTimeLocal"),
-            "duration_seconds": activity.get("duration"),
-            "distance_metres": activity.get("distance"),
-            "calories": activity.get("calories"),
-            "average_hr": activity.get("averageHR"),
-            "max_hr": activity.get("maxHR"),
+
+            "start_local": activity.get(
+                "startTimeLocal"
+            ),
+
+            "duration_seconds": activity.get(
+                "duration"
+            ),
+
+            "distance_metres": activity.get(
+                "distance"
+            ),
+
+            "calories": activity.get(
+                "calories"
+            ),
+
+            "average_hr": activity.get(
+                "averageHR"
+            ),
+
+            "max_hr": activity.get(
+                "maxHR"
+            ),
         })
 
     return cleaned
@@ -180,9 +248,21 @@ def print_day(day):
     print()
     print(day["date"])
     print("-------------------------")
-    print("Steps:", day["steps"])
-    print("Resting HR:", day["heart_rate"]["resting_bpm"])
-    print("Average stress:", day["stress"]["average"])
+
+    print(
+        "Steps:",
+        day["steps"]
+    )
+
+    print(
+        "Resting HR:",
+        day["heart_rate"]["resting_bpm"]
+    )
+
+    print(
+        "Average stress:",
+        day["stress"]["average"]
+    )
 
     print(
         "Body Battery:",
@@ -191,32 +271,257 @@ def print_day(day):
         day["body_battery"]["highest"]
     )
 
-    print("Sleep hours:", day["sleep"]["hours"])
-    print("Sleep score:", day["sleep"]["score"])
-    print("Sleep start:", day["sleep"]["start"])
-    print("Sleep end:", day["sleep"]["end"])
-    print("Overnight HRV:", day["hrv"]["last_night_average"])
+    print(
+        "Sleep hours:",
+        day["sleep"]["hours"]
+    )
+
+    print(
+        "Sleep score:",
+        day["sleep"]["score"]
+    )
+
+    print(
+        "Sleep start:",
+        day["sleep"]["start"]
+    )
+
+    print(
+        "Sleep end:",
+        day["sleep"]["end"]
+    )
+
+    print(
+        "Overnight HRV:",
+        day["hrv"]["last_night_average"]
+    )
 
 
-# Connect using saved authentication
+def build_email_text(report):
+    lines = []
+
+    lines.append("GARMIN 48-HOUR CONTEXT")
+    lines.append("======================")
+    lines.append("")
+
+    for day in report["daily"]:
+        lines.append(day["date"])
+        lines.append("-------------------------")
+
+        lines.append(
+            f"Steps: {day['steps']}"
+        )
+
+        lines.append(
+            "Resting HR: "
+            f"{day['heart_rate']['resting_bpm']}"
+        )
+
+        lines.append(
+            "Average stress: "
+            f"{day['stress']['average']}"
+        )
+
+        lines.append(
+            "Body Battery: "
+            f"{day['body_battery']['lowest']} "
+            "→ "
+            f"{day['body_battery']['highest']}"
+        )
+
+        lines.append(
+            "Sleep hours: "
+            f"{day['sleep']['hours']}"
+        )
+
+        lines.append(
+            "Sleep score: "
+            f"{day['sleep']['score']}"
+        )
+
+        lines.append(
+            "Sleep start: "
+            f"{day['sleep']['start']}"
+        )
+
+        lines.append(
+            "Sleep end: "
+            f"{day['sleep']['end']}"
+        )
+
+        lines.append(
+            "Overnight HRV: "
+            f"{day['hrv']['last_night_average']}"
+        )
+
+        lines.append("")
+
+    lines.append("Activities")
+    lines.append("-------------------------")
+
+    if report["activities"]:
+        for activity in report["activities"]:
+            lines.append(
+                f"{activity['start_local']} | "
+                f"{activity['type']} | "
+                f"{activity['name']} | "
+                f"{activity['duration_seconds']} sec | "
+                f"avg HR {activity['average_hr']}"
+            )
+
+    else:
+        lines.append("No activities recorded.")
+
+    lines.append("")
+    lines.append("Intraday data")
+    lines.append("-------------------------")
+
+    for day in report["intraday"]:
+        hr_status = (
+            "OK"
+            if day["heart_rate"] is not None
+            else "Unavailable"
+        )
+
+        stress_status = (
+            "OK"
+            if day["stress_body_battery"] is not None
+            else "Unavailable"
+        )
+
+        lines.append(
+            f"{day['date']} | "
+            f"HR: {hr_status} | "
+            f"Stress/Body Battery: {stress_status}"
+        )
+
+    lines.append("")
+    lines.append("Interpretation notes")
+    lines.append("-------------------------")
+
+    for note in report["interpretation_notes"]:
+        lines.append(f"- {note}")
+
+    lines.append("")
+    lines.append("MACHINE-READABLE JSON")
+    lines.append("=====================")
+    lines.append("")
+
+    lines.append(
+        json.dumps(
+            report,
+            indent=2,
+            default=str
+        )
+    )
+
+    return "\n".join(lines)
+
+
+def send_email(report):
+    load_dotenv(ENV_FILE)
+
+    api_key = os.getenv("RESEND_API_KEY")
+    email_to = os.getenv("EMAIL_TO")
+
+    if not api_key:
+        raise RuntimeError(
+            f"RESEND_API_KEY not found in {ENV_FILE}"
+        )
+
+    if not email_to:
+        raise RuntimeError(
+            f"EMAIL_TO not found in {ENV_FILE}"
+        )
+
+    generated = datetime.fromisoformat(
+        report["generated_at"]
+    )
+
+    subject = (
+        "Garmin 48h Report — "
+        f"{generated.strftime('%d %b %Y, %H:%M')}"
+    )
+
+    email_text = build_email_text(report)
+
+    response = requests.post(
+        "https://api.resend.com/emails",
+
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+
+        json={
+            "from": EMAIL_FROM,
+            "to": [email_to],
+            "subject": subject,
+            "text": email_text,
+        },
+
+        timeout=30,
+    )
+
+    print(
+        "Email HTTP status:",
+        response.status_code
+    )
+
+    if not response.ok:
+        print(
+            "Email response:",
+            response.text
+        )
+
+    response.raise_for_status()
+
+    print(
+        "Garmin report emailed successfully."
+    )
+
+
+# ---------------------------------------------------------
+# Main
+# ---------------------------------------------------------
+
 client = Garmin()
+
 client.login(TOKEN_DIR)
 
-print("Connected to Garmin using saved token.")
+print(
+    "Connected to Garmin using saved token."
+)
 
-today = date.today()
+today = datetime.now(UK_TZ).date()
 yesterday = today - timedelta(days=1)
 
 days = [
-    get_day(client, yesterday),
-    get_day(client, today),
+    get_day(
+        client,
+        yesterday
+    ),
+
+    get_day(
+        client,
+        today
+    ),
 ]
 
-print("Fetching intraday Garmin timelines...")
+print(
+    "Fetching intraday Garmin timelines..."
+)
 
 intraday = [
-    get_intraday(client, yesterday),
-    get_intraday(client, today),
+    get_intraday(
+        client,
+        yesterday
+    ),
+
+    get_intraday(
+        client,
+        today
+    ),
 ]
 
 activities = get_activities(
@@ -226,7 +531,9 @@ activities = get_activities(
 )
 
 report = {
-    "generated_at": datetime.now(UK_TZ).isoformat(),
+    "generated_at": datetime.now(
+        UK_TZ
+    ).isoformat(),
 
     "period": {
         "start_date": yesterday.isoformat(),
@@ -234,10 +541,26 @@ report = {
     },
 
     "interpretation_notes": [
-        "Garmin wearable data provides contextual information only.",
-        "Associations between Garmin metrics and glucose changes do not prove causation.",
-        "Current-day Garmin totals may be incomplete.",
-        "Sleep, stress, Body Battery and HRV are Garmin-derived estimates.",
+        (
+            "Garmin wearable data provides "
+            "contextual information only."
+        ),
+
+        (
+            "Associations between Garmin metrics "
+            "and glucose changes do not prove "
+            "causation."
+        ),
+
+        (
+            "Current-day Garmin totals may be "
+            "incomplete."
+        ),
+
+        (
+            "Sleep, stress, Body Battery and HRV "
+            "are Garmin-derived estimates."
+        ),
     ],
 
     "daily": days,
@@ -247,8 +570,12 @@ report = {
 
 
 print()
-print("GARMIN 48-HOUR CONTEXT")
-print("======================")
+print(
+    "GARMIN 48-HOUR CONTEXT"
+)
+print(
+    "======================"
+)
 
 for day_data in days:
     print_day(day_data)
@@ -272,8 +599,11 @@ if activities:
             "| avg HR",
             activity["average_hr"]
         )
+
 else:
-    print("No activities recorded.")
+    print(
+        "No activities recorded."
+    )
 
 
 print()
@@ -281,8 +611,15 @@ print("Intraday data")
 print("-------------------------")
 
 for day_data in intraday:
-    hr_ok = day_data["heart_rate"] is not None
-    stress_ok = day_data["stress_body_battery"] is not None
+    hr_ok = (
+        day_data["heart_rate"]
+        is not None
+    )
+
+    stress_ok = (
+        day_data["stress_body_battery"]
+        is not None
+    )
 
     print(
         day_data["date"],
@@ -293,7 +630,11 @@ for day_data in intraday:
     )
 
 
-with open("garmin_summary.json", "w") as file:
+with open(
+    "garmin_summary.json",
+    "w"
+) as file:
+
     json.dump(
         report,
         file,
@@ -301,5 +642,14 @@ with open("garmin_summary.json", "w") as file:
         default=str
     )
 
+
 print()
-print("Saved: garmin_summary.json")
+print(
+    "Saved: garmin_summary.json"
+)
+
+print(
+    "Sending Garmin report by email..."
+)
+
+send_email(report)
